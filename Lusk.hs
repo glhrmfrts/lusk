@@ -15,5 +15,6 @@ main = runErrorT (runStateT repl symbolTable) >> return ()
       input <- liftIO getLine 
       case readExpr input of
         Left err -> liftIO (putStrLn err)
-        Right tree -> liftIO (putStrLn $ show tree)-- eval tree >>= \v -> liftIO (putStrLn $ show v)
+        Right tree -> {-liftIO (putStrLn $ show tree)-} catchError (eval tree >>= \v -> liftIO (putStrLn $ show v))
+                                                                   (liftIO . putStrLn)
       repl

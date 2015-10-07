@@ -14,20 +14,21 @@ symbolTable :: SymbolTable
 symbolTable = 
   M.fromList [
     ("pi", Number pi),
-    ("print", HIOFunction lPrint)
+    ("print", HIOFunction lPrint),
+    ("type", HFunction lType)
   ]
 
 -- lua considers only "nil" and "false" as false values
 -- everything else is true
 toBool :: Value -> Bool
 toBool Nil = False
-toBool (Bool b) = b
+toBool (Boolean b) = b
 toBool v = True
 
 -- map operators to haskell funcions
 evalUnaryOp :: OpType -> Value -> Value
 evalUnaryOp Sub = negate
-evalUnaryOp Not = \a -> Bool $ not (toBool a)
+evalUnaryOp Not = \a -> Boolean $ not (toBool a)
 
 evalOp :: OpType -> Value -> Value -> Value
 evalOp Add a b = (+) a b
@@ -35,23 +36,22 @@ evalOp Sub a b = (-) a b
 evalOp Mul a b = (*) a b
 evalOp Div a b = (/) a b
 evalOp Pow a b = (**) a b
-evalOp Lt a b = Bool $ (<) a b
-evalOp Gt a b = Bool $ (>) a b
-evalOp LtEq a b = Bool $ (<=) a b
-evalOp GtEq a b = Bool $ (>=) a b
+evalOp Lt a b = Boolean $ (<) a b
+evalOp Gt a b = Boolean $ (>) a b
+evalOp LtEq a b = Boolean $ (<=) a b
+evalOp GtEq a b = Boolean $ (>=) a b
 
-evalList :: (Monad m) => [SyntaxTree] -> [Value] -> StateT SymbolTable (ErrorT String m) [Value]
+evalList :: (Monad m) => (MonadIO m) => [SyntaxTree] -> [Value] -> StateT SymbolTable (ErrorT String m) [Value]
+evalList [] vs' = return $ reverse vs'
 evalList (v:vs) vs' = do
   v' <- eval v
-  case vs of
-    [] -> return (reverse $ v':vs')
-    _ -> evalList vs (v':vs')
+  evalList vs (v':vs')
 
 -- main evaluation function
-eval :: (Monad m) => SyntaxTree -> StateT SymbolTable (ErrorT String m) Value
+eval :: (Monad m) => (MonadIO m) => SyntaxTree -> StateT SymbolTable (ErrorT String m) Value
 eval (NumberLiteral n) = return $ Number n
 eval (StringLiteral str) = return $ String str
-eval (BoolLiteral b) = return $ Bool b
+eval (BoolLiteral b) = return $ Boolean b
 eval (Parentheses p) = eval p
 eval (UnaryOp op r) = 
   eval r >>= \v -> return (evalUnaryOp op $ v)
@@ -96,9 +96,19 @@ eval (Call fn args) = do
   fn' <- eval fn
   args' <- evalList args []
   case fn' of
-    (HFunction f) -> return $ f args'
-    (HIOFunction f) -> liftIO $ f args'
+    (HFunction f) -> callHFunction $ f args'
+    (HIOFunction f) -> callHIOFunction $ f args'
     _ -> return Nil
+  where
+    callHFunction r = do 
+      case r of
+        Left err -> throwError err
+        Right val -> return val
+    callHIOFunction f = do
+      r <- liftIO f
+      case r of
+        Left err -> throwError err
+        Right val -> return val
 
 eval (Chunk (s:stats)) = do
   res <- eval s
