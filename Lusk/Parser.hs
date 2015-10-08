@@ -13,7 +13,9 @@ data OpType
   | Lt 
   | Gt 
   | LtEq 
-  | GtEq 
+  | GtEq
+  | Eq
+  | NotEq
   | And
   | Or
   | Not deriving (Enum, Eq, Ord, Show)
@@ -29,6 +31,7 @@ data SyntaxTree
   | BinaryOp OpType (SyntaxTree, SyntaxTree)
   | Call SyntaxTree [SyntaxTree]
   | Assignment [SyntaxTree] [SyntaxTree]
+  | IfStat SyntaxTree SyntaxTree SyntaxTree
   | Chunk [SyntaxTree] deriving (Eq, Show)
 
 
@@ -47,6 +50,8 @@ getOpType "<" = Lt
 getOpType ">" = Gt
 getOpType "<=" = LtEq
 getOpType ">=" = GtEq
+getOpType "==" = Eq
+getOpType "~=" = NotEq
 getOpType "and" = And
 getOpType "or" = Or
 getOpType "not" = Not
@@ -55,6 +60,8 @@ precedence :: M.Map OpType Integer
 precedence = M.fromList [
     (Or, 40),
     (And, 50),
+    (Eq, 80),
+    (NotEq, 80),
     (LtEq, 90),
     (GtEq, 90),
     (Lt, 90),
@@ -137,10 +144,11 @@ parseParentheses = do
 
 -- primary := number | string | symbol | parentheses
 parsePrimaryExpr :: Parser SyntaxTree
-parsePrimaryExpr = parseNumber
-  <|> parseBool
-  <|> parseString 
-  <|> parseIdentifier
+parsePrimaryExpr = do
+  try parseNumber
+  <|> try parseBool
+  <|> try parseString 
+  <|> try parseIdentifier
   <|> parseParentheses
 
 -- unary := '-' primaryExpr | primaryExpr
@@ -230,21 +238,34 @@ parseLogicExpr = do
     return $ binary (getOpType op) (lhs, rhs)
   <|> parseRelationalExpr
 
--- assignment := identifier '=' expr | logic
-parseAssignmentExpr :: Parser SyntaxTree
-parseAssignmentExpr = do
+-- equality := logic (==|~=) expr | logic
+parseEqualityExpr :: Parser SyntaxTree
+parseEqualityExpr = do
   try $ do
-    names <- parseNameList
+    lhs <- parseLogicExpr
     spaces
-    op <- char '='
+    op <- string "==" <|> string "~="
     spaces
-    exprs <- parseExprList
-    return $ Assignment names exprs
+    rhs <- parseExpr
+    return $ binary (getOpType op) (lhs, rhs)
   <|> parseLogicExpr
 
 -- expr := assignment
 parseExpr :: Parser SyntaxTree
-parseExpr = parseAssignmentExpr
+parseExpr = parseEqualityExpr
+
+-- assignment := identifier '=' expr | equality
+parseAssignment :: Parser SyntaxTree
+parseAssignment = do
+  try $ do
+    names <- parseNameList
+    spaces
+    op <- char '='
+    noneOf "="
+    spaces
+    exprs <- parseExprList
+    return $ Assignment names exprs
+  <|> parseExpr
 
 -- nameList := identifier (, nameList*)
 parseNameList :: Parser [SyntaxTree]
@@ -256,9 +277,33 @@ parseExprList :: Parser [SyntaxTree]
 parseExprList = 
   parseExpr `sepBy` (spaces >> char ',' >> spaces)
 
+-- ifStat := 'if' expr 'then' stat+ 'end'
+parseIfStat :: Parser SyntaxTree
+parseIfStat = do
+  string "if" >> notFollowedBy alphaNum
+  elseIfHelper
+  where
+    elseIfHelper = do
+      cond <- parseExpr
+      string "then" >> notFollowedBy alphaNum
+      block <- parseStat <* (string "end" <|> string "elseif" <|> string "else")
+      case end of
+        "elseif" -> do
+          right <- elseIfHelper
+          return $ IfStat cond block right
+        "else" -> do
+          right <- parseChunk
+          string "end"
+          return $ IfStat cond block right
+        "end" -> do
+          return $ IfStat cond block Empty
+
 -- stat := expr
 parseStat :: Parser SyntaxTree
-parseStat = parseExpr
+parseStat = do
+  try parseIfStat
+  <|> try parseAssignment
+  <|> parseExpr
 
 -- chunk := stat+
 parseChunk :: Parser SyntaxTree

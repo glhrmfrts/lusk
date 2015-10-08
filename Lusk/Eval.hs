@@ -40,6 +40,8 @@ evalOp Lt a b = Boolean $ (<) a b
 evalOp Gt a b = Boolean $ (>) a b
 evalOp LtEq a b = Boolean $ (<=) a b
 evalOp GtEq a b = Boolean $ (>=) a b
+evalOp Eq a b = Boolean $ (==) a b
+evalOp NotEq a b = Boolean $ not ((==) a b)
 
 evalList :: (Monad m) => (MonadIO m) => [SyntaxTree] -> [Value] -> StateT SymbolTable (ErrorT String m) [Value]
 evalList [] vs' = return $ reverse vs'
@@ -49,6 +51,7 @@ evalList (v:vs) vs' = do
 
 -- main evaluation function
 eval :: (Monad m) => (MonadIO m) => SyntaxTree -> StateT SymbolTable (ErrorT String m) Value
+eval (Empty) = return Nil
 eval (NumberLiteral n) = return $ Number n
 eval (StringLiteral str) = return $ String str
 eval (BoolLiteral b) = return $ Boolean b
@@ -109,6 +112,11 @@ eval (Call fn args) = do
       case r of
         Left err -> throwError err
         Right val -> return val
+
+eval (IfStat c t r) = do
+  c' <- eval c
+  if toBool c' then eval t else eval r
+  return Nil
 
 eval (Chunk (s:stats)) = do
   res <- eval s
