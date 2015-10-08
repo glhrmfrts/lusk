@@ -14,8 +14,8 @@ symbolTable :: SymbolTable
 symbolTable = 
   M.fromList [
     ("pi", Number pi),
-    ("print", HIOFunction lPrint),
-    ("type", HFunction lType)
+    ("print", HIOFun lPrint),
+    ("type", HFun lType)
   ]
 
 -- lua considers only "nil" and "false" as false values
@@ -52,10 +52,13 @@ evalList (v:vs) vs' = do
 -- main evaluation function
 eval :: (Monad m) => (MonadIO m) => SyntaxTree -> StateT SymbolTable (ErrorT String m) Value
 eval (Empty) = return Nil
-eval (NumberLiteral n) = return $ Number n
-eval (StringLiteral str) = return $ String str
-eval (BoolLiteral b) = return $ Boolean b
-eval (Parentheses p) = eval p
+eval (NumberLit n) = return $ Number n
+eval (StringLit str) = return $ String str
+eval (BoolLit b) = return $ Boolean b
+eval (TableLit vs) = do
+  vs' <- evalList vs []
+  return $ Table (zip [Number (fromIntegral x) | x <- [1..length vs]] vs')
+eval (Paren p) = eval p
 eval (UnaryOp op r) = 
   eval r >>= \v -> return (evalUnaryOp op $ v)
 eval (BinaryOp op (l, r)) =
@@ -78,7 +81,7 @@ eval (BinaryOp op (l, r)) =
 -- takes a list of names and a list of values
 -- evaluates all the values first (in case of 'variable swaping')
 -- then zip that into a list of pairs and add to a symbol table
-eval (Assignment ns vs) = do
+eval (Assign ns vs) = do
   vs' <- evalList vs []
   doMultipleAssign $ zip (Prelude.map (\(Var s) -> s) ns) vs'
     where
@@ -99,24 +102,44 @@ eval (Call fn args) = do
   fn' <- eval fn
   args' <- evalList args []
   case fn' of
-    (HFunction f) -> callHFunction $ f args'
-    (HIOFunction f) -> callHIOFunction $ f args'
+    (HFun f) -> callHFun $ f args'
+    (HIOFun f) -> callHIOFun $ f args'
     _ -> return Nil
   where
-    callHFunction r = do 
+    callHFun r = do 
       case r of
         Left err -> throwError err
         Right val -> return val
-    callHIOFunction f = do
+    callHIOFun f = do
       r <- liftIO f
       case r of
         Left err -> throwError err
         Right val -> return val
 
+-- | Table subscript
+eval (Subscript t k) = do
+  t' <- eval t
+  k' <- eval k
+  extract t' k'
+  where
+    -- | Extract a value from the table with the given [key]
+    extract (Table pairs) key = do
+      let found = (filter (\(tk, tv) -> tk == key) pairs)
+      if length found > 0 then
+        return $ snd $ head found
+      else
+        return Nil
+
 eval (IfStat c t r) = do
   c' <- eval c
   if toBool c' then eval t else eval r
   return Nil
+
+eval (Block (s:stats)) = do
+  eval s
+  case stats of
+    [] -> return Nil
+    _ -> eval $ Block stats
 
 eval (Chunk (s:stats)) = do
   res <- eval s

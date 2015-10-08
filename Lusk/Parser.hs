@@ -23,15 +23,18 @@ data OpType
 data SyntaxTree
   = Empty
   | Var String
-  | NumberLiteral Double
-  | StringLiteral [Char]
-  | BoolLiteral Bool
-  | Parentheses SyntaxTree
+  | NumberLit Double
+  | StringLit [Char]
+  | BoolLit Bool
+  | TableLit [SyntaxTree]
+  | Paren SyntaxTree
   | UnaryOp OpType SyntaxTree
   | BinaryOp OpType (SyntaxTree, SyntaxTree)
   | Call SyntaxTree [SyntaxTree]
-  | Assignment [SyntaxTree] [SyntaxTree]
+  | Subscript SyntaxTree SyntaxTree
+  | Assign [SyntaxTree] [SyntaxTree]
   | IfStat SyntaxTree SyntaxTree SyntaxTree
+  | Block [SyntaxTree]
   | Chunk [SyntaxTree] deriving (Eq, Show)
 
 
@@ -77,7 +80,7 @@ rightAssociative :: OpType -> Bool
 rightAssociative Pow = True
 rightAssociative op = False
 
--- helper for operator associativity and precedence
+-- | Helper for operator associativity and precedence
 binary :: OpType -> (SyntaxTree, SyntaxTree) -> SyntaxTree
 binary op (l, BinaryOp r (rl, rr)) =
   case rightAssociative op of
@@ -90,6 +93,18 @@ binary op (l, BinaryOp r (rl, rr)) =
 
 binary op t = BinaryOp op t
 
+reserved :: String -> Parser String
+reserved s = do
+  w <- string s
+  notFollowedBy alphaNum
+  return w
+
+-- | Tokens that mean the end of a block
+terminators :: Parser String
+terminators = do
+  try (reserved "end")
+  <|> try (reserved "elseif")
+  <|> (reserved "else")
 
 -- identifier := [a-z][a-z0-9-_]*
 parseIdentifier :: Parser SyntaxTree
@@ -107,22 +122,22 @@ parseRealNumber = do
     first <- (many1 digit)
     char '.'
     frac <- (many1 digit)
-    return $ NumberLiteral (read (first ++ "." ++ frac))
+    return $ NumberLit (read (first ++ "." ++ frac))
   <|> do
     char '.'
     frac <- (many1 digit)
-    return $ NumberLiteral (read ("0" ++ "." ++ frac))
+    return $ NumberLit (read ("0" ++ "." ++ frac))
 
 -- number := [0-9]+
 parseNumber :: Parser SyntaxTree
 parseNumber = do
   try parseRealNumber
-  <|> (liftM (NumberLiteral . read) $ many1 digit)
+  <|> (liftM (NumberLit . read) $ many1 digit)
 
 -- bool := true|false
 parseBool = do
   bool <- (string "true") <|> (string "false")
-  return $ BoolLiteral (getBoolValue bool)
+  return $ BoolLit (getBoolValue bool)
 
 -- string := ("|') (.*) ("|')
 parseString :: Parser SyntaxTree
@@ -130,26 +145,41 @@ parseString = do
   oneOf "\"'"
   str <- many (noneOf "\"'")
   oneOf "\"'"
-  return $ StringLiteral str
+  return $ StringLit str
 
 -- parentheses := '(' expr ')'
-parseParentheses :: Parser SyntaxTree
-parseParentheses = do
+parseParen :: Parser SyntaxTree
+parseParen = do
   char '('
   spaces
   expr <- parseExpr
   spaces
   char ')'
-  return $ Parentheses expr
+  return $ Paren expr
 
--- primary := number | string | symbol | parentheses
+-- tableItems := primary '=' expr | expr
+parseTableItems :: Parser [SyntaxTree]
+parseTableItems = parseExprList
+
+-- table := '{' expr* '}'
+parseTable :: Parser SyntaxTree
+parseTable = do 
+  char '{'
+  spaces
+  items <- parseTableItems
+  spaces
+  char '}'
+  return $ TableLit items
+
+-- primary := number | string | table | symbol | parentheses
 parsePrimaryExpr :: Parser SyntaxTree
 parsePrimaryExpr = do
   try parseNumber
   <|> try parseBool
-  <|> try parseString 
+  <|> try parseString
+  <|> try parseTable
   <|> try parseIdentifier
-  <|> parseParentheses
+  <|> parseParen
 
 -- unary := '-' primaryExpr | primaryExpr
 parseUnaryExpr :: Parser SyntaxTree
@@ -173,22 +203,37 @@ parseCallExpr = do
       callHelper lhs = do
         try $ do
           spaces >> char '('
-          args <- parseExprList
+          args <- (try $ parseExprList <|> (do { return [] }))
           spaces >> char ')'
           callHelper $ Call lhs args
+        <|> return lhs
+
+-- sub := call '[' expr ']' | call
+parseSubExpr :: Parser SyntaxTree
+parseSubExpr = do
+  call <- parseCallExpr
+  subHelper call
+    where
+      subHelper :: SyntaxTree -> Parser SyntaxTree
+      subHelper lhs = do
+        try $ do
+          spaces >> char '['
+          i <- parseExpr
+          spaces >> char ']'
+          subHelper $ Subscript lhs i
         <|> return lhs
 
 -- pow := call '^' expr | call
 parsePowExpr :: Parser SyntaxTree
 parsePowExpr = do
   try $ do
-    lhs <- parseCallExpr
+    lhs <- parseSubExpr
     spaces
     char '^'
     spaces
     rhs <- parseExpr
     return $ binary Pow (lhs, rhs)
-  <|> parseCallExpr
+  <|> parseSubExpr
 
 -- multiplicative := unary (*|/) expr | unaryExpr
 parseMultiplicativeExpr :: Parser SyntaxTree
@@ -255,8 +300,8 @@ parseExpr :: Parser SyntaxTree
 parseExpr = parseEqualityExpr
 
 -- assignment := identifier '=' expr | equality
-parseAssignment :: Parser SyntaxTree
-parseAssignment = do
+parseAssign :: Parser SyntaxTree
+parseAssign = do
   try $ do
     names <- parseNameList
     spaces
@@ -264,7 +309,7 @@ parseAssignment = do
     noneOf "="
     spaces
     exprs <- parseExprList
-    return $ Assignment names exprs
+    return $ Assign names exprs
   <|> parseExpr
 
 -- nameList := identifier (, nameList*)
@@ -274,26 +319,42 @@ parseNameList =
 
 -- exprList := expr (, exprList*)
 parseExprList :: Parser [SyntaxTree]
-parseExprList = 
-  parseExpr `sepBy` (spaces >> char ',' >> spaces)
+parseExprList = do
+  e <- parseExpr
+  listHelper [e]
+  where
+    listHelper ps = do
+      try $ do
+        spaces
+        char ','
+        spaces
+        expr <- parseExpr
+        listHelper $ expr:ps
+      <|> (return $ reverse ps)
 
 -- ifStat := 'if' expr 'then' stat+ 'end'
 parseIfStat :: Parser SyntaxTree
 parseIfStat = do
-  string "if" >> notFollowedBy alphaNum
+  reserved "if"
   elseIfHelper
   where
     elseIfHelper = do
+      spaces
       cond <- parseExpr
-      string "then" >> notFollowedBy alphaNum
-      block <- parseStat <* (string "end" <|> string "elseif" <|> string "else")
+      spaces
+      reserved "then"
+      spaces
+      b <- manyTill parseStat (lookAhead $ spaces >> terminators)
+      let block = Block b
+      spaces
+      end <- terminators
       case end of
         "elseif" -> do
           right <- elseIfHelper
           return $ IfStat cond block right
         "else" -> do
-          right <- parseChunk
-          string "end"
+          spaces
+          right <- parseBlock
           return $ IfStat cond block right
         "end" -> do
           return $ IfStat cond block Empty
@@ -302,8 +363,14 @@ parseIfStat = do
 parseStat :: Parser SyntaxTree
 parseStat = do
   try parseIfStat
-  <|> try parseAssignment
+  <|> try parseAssign
   <|> parseExpr
+
+-- block := stat+ end
+parseBlock :: Parser SyntaxTree
+parseBlock = do
+  stats <- manyTill parseStat (spaces >> reserved "end")
+  return $ Block stats
 
 -- chunk := stat+
 parseChunk :: Parser SyntaxTree

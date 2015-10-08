@@ -1,7 +1,9 @@
 module Lusk.Value where
 
-type HaskellFunction = ([Value] -> (Either String Value))
-type HaskellIOFunction = ([Value] -> IO (Either String Value))
+import Data.List
+
+type HaskellFun = ([Value] -> (Either String Value))
+type HaskellIOFun = ([Value] -> IO (Either String Value))
 
 data Value
   = Nil
@@ -9,8 +11,8 @@ data Value
   | Boolean Bool
   | String [Char] 
   | Table [(Value, Value)]
-  | HFunction HaskellFunction
-  | HIOFunction HaskellIOFunction
+  | HFun HaskellFun
+  | HIOFun HaskellIOFun
 
 instance Num Value where
   (+) (Number a) (Number b) = Number (a + b)
@@ -35,7 +37,7 @@ instance Eq Value where
   (==) (Boolean a) (Boolean b) = (a == b)
   (==) (Boolean a) _ = False
   (==) (Table a) _ = False
-  (==) (HFunction a) _ = False
+  (==) (HFun a) _ = False
   (==) (Nil) (Nil) = True
   (==) (Nil) _ = False
 
@@ -50,3 +52,4 @@ instance Show Value where
   show (Number a) = show a
   show (Boolean a) = if a then "true" else "false"
   show (String a) = a
+  show (Table a) = "{" ++ intercalate "," [show (fst x) ++ "=" ++ show (snd x) | x <- a] ++ "}"
