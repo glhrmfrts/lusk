@@ -1,6 +1,8 @@
 module Lusk.Value where
 
 import Data.List
+import Data.Map
+import Lusk.Parser (SyntaxTree)
 
 type HaskellFun = ([Value] -> (Either String Value))
 type HaskellIOFun = ([Value] -> IO (Either String Value))
@@ -11,6 +13,7 @@ data Value
   | Boolean Bool
   | String [Char] 
   | Table [(Value, Value)]
+  | Closure SyntaxTree (Map String Value)
   | HFun HaskellFun
   | HIOFun HaskellIOFun
 

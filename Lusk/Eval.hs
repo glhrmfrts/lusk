@@ -56,6 +56,34 @@ type SM m a = StateT LuskState (ErrorT String m) a
 modifyST :: LuskState -> SymbolTable -> LuskState
 modifyST s st = s { symbolTable = st }
 
+-- Create a new state that is a child of [p]
+newState :: LuskState -> LuskState
+newState p = 
+  LuskState {
+    symbolTable = M.fromList [],
+    retVal = Nil,
+    ret = False,
+    brk = False,
+    cont = False,
+    parent = Just p
+  }
+
+-- Pushes a new state a level down, this means the beginning of a loop or function
+pushState :: (Monad m) => (MonadIO m) => SM m ()
+pushState = do
+  liftIO $ putStrLn "push"
+  cs <- get
+  put $ newState cs
+
+-- Pop the current state and make it's parent the current state
+-- Occurs at the end of a function or a loop
+popState :: (Monad m) => (MonadIO m) => SM m ()
+popState = do
+  liftIO $ putStrLn "push"
+  cs <- get
+  let (Just p) = parent cs
+  put p
+
 -- lua considers only "nil" and "false" as false values
 -- everything else is true
 toBool :: Value -> Bool
@@ -185,12 +213,16 @@ eval (IfStat c t r) = do
   return Nil
 
 eval (WhileStat c b) = do
-  c' <- eval c
-  case toBool c' of
-    True -> do
-      eval b
-      eval $ WhileStat c b
-    False -> return Nil
+  pushState >> doWhile c b >>= \v -> popState >> return v
+  where
+    doWhile c b = do
+      c' <- eval c
+      case toBool c' of
+        True -> do
+          eval b
+          doWhile c b
+        False -> do
+          return Nil
 
 eval (Block (s:stats)) = do
   eval s
