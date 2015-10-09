@@ -7,9 +7,9 @@ import Lusk.Parser
 import Lusk.Eval
 
 main :: IO ()
-main = runErrorT (runStateT repl symbolTable) >> return ()
+main = runErrorT (runStateT repl globalState) >> return ()
   where
-    repl :: StateT SymbolTable (ErrorT String IO) ()
+    repl :: SM IO ()
     repl = do
       liftIO (putStr "> ")
       input <- liftIO getLine 

@@ -8,12 +8,13 @@ data OpType
   = Add 
   | Sub 
   | Mul 
-  | Div 
+  | Div
   | Pow
   | Lt 
   | Gt 
   | LtEq 
   | GtEq
+  | Concat
   | Eq
   | NotEq
   | And
@@ -22,19 +23,20 @@ data OpType
 
 data SyntaxTree
   = Empty
-  | Var String
+  | Var String -- Name of the variable
   | NumberLit Double
-  | StringLit [Char]
+  | StringLit String
   | BoolLit Bool
-  | TableLit [SyntaxTree]
+  | TableLit [SyntaxTree] -- Table items
   | Paren SyntaxTree
   | UnaryOp OpType SyntaxTree
-  | BinaryOp OpType (SyntaxTree, SyntaxTree)
-  | Call SyntaxTree [SyntaxTree]
-  | Subscript SyntaxTree SyntaxTree
-  | Assign [SyntaxTree] [SyntaxTree]
-  | IfStat SyntaxTree SyntaxTree SyntaxTree
-  | Block [SyntaxTree]
+  | BinaryOp OpType (SyntaxTree, SyntaxTree) -- Operator type, (left and right) expressions
+  | Call SyntaxTree [SyntaxTree] -- Function and arguments
+  | Subscript SyntaxTree SyntaxTree -- Table and key
+  | Assign [SyntaxTree] [SyntaxTree] -- Names and values
+  | IfStat SyntaxTree SyntaxTree SyntaxTree -- Condition, then-block, else|elseif-block
+  | WhileStat SyntaxTree SyntaxTree -- Condition, then-block
+  | Block [SyntaxTree] -- Statements
   | Chunk [SyntaxTree] deriving (Eq, Show)
 
 
@@ -53,6 +55,7 @@ getOpType "<" = Lt
 getOpType ">" = Gt
 getOpType "<=" = LtEq
 getOpType ">=" = GtEq
+getOpType ".." = Concat
 getOpType "==" = Eq
 getOpType "~=" = NotEq
 getOpType "and" = And
@@ -69,6 +72,7 @@ precedence = M.fromList [
     (GtEq, 90),
     (Lt, 90),
     (Gt, 90),
+    (Concat, 95),
     (Add, 100),
     (Sub, 100),
     (Mul, 110),
@@ -259,17 +263,29 @@ parseAdditiveExpr = do
     return $ binary (getOpType [op]) (lhs, rhs)
   <|> parseMultiplicativeExpr
 
--- relational := additive (<|>|<=|>=) expr | additive
+-- concat := additive '..' expr | additive
+parseConcatExpr :: Parser SyntaxTree
+parseConcatExpr = do
+  try $ do
+    lhs <- parseAdditiveExpr
+    spaces
+    op <- string ".."
+    spaces
+    rhs <- parseExpr
+    return $ binary (getOpType op) (lhs, rhs)
+  <|> parseAdditiveExpr
+
+-- relational := concat (<|>|<=|>=) expr | concat
 parseRelationalExpr :: Parser SyntaxTree
 parseRelationalExpr = do
   try $ do
-    lhs <- parseAdditiveExpr
+    lhs <- parseConcatExpr
     spaces
     op <- string "<" <|> string ">" <|> string "<=" <|> string ">="
     spaces
     rhs <- parseExpr
     return $ binary (getOpType op) (lhs, rhs)
-  <|> parseAdditiveExpr
+  <|> parseConcatExpr
 
 -- logic := relational (and|or) expr | relational
 parseLogicExpr :: Parser SyntaxTree
@@ -359,10 +375,22 @@ parseIfStat = do
         "end" -> do
           return $ IfStat cond block Empty
 
+-- whileStat := 'while' expr 'do' block
+parseWhileStat :: Parser SyntaxTree
+parseWhileStat = do
+  reserved "while"
+  spaces
+  cond <- parseExpr
+  spaces
+  reserved "do"
+  block <- parseBlock
+  return $ WhileStat cond block
+
 -- stat := expr
 parseStat :: Parser SyntaxTree
 parseStat = do
-  try parseIfStat
+  try parseWhileStat
+  <|> try parseIfStat
   <|> try parseAssign
   <|> parseExpr
 

@@ -16,9 +16,6 @@ data Value
 
 instance Num Value where
   (+) (Number a) (Number b) = Number (a + b)
-  (+) (Number a) (String b) = String (show a ++ b)
-  (+) (String a) (Number b) = String (a ++ show b)
-  (+) (String a) (String b) = String (a ++ b)
   (-) (Number a) (Number b) = Number (a - b)
   (*) (Number a) (Number b) = Number (a * b)
   fromInteger a = Number (fromIntegral a)
